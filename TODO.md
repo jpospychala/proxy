@@ -1,0 +1,4 @@
+- write tests
+- parse http request
+- read config from file
+- more elaborate keyword filtering
