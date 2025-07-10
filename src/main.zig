@@ -1,6 +1,6 @@
 const std = @import("std");
 const net = std.net;
-const print = std.debug.print;
+const log = std.log;
 const Thread = std.Thread;
 
 const Config = struct {
@@ -29,14 +29,14 @@ fn runServer(allocator: std.mem.Allocator, config: *const Config) !void {
     });
     defer server.deinit();
 
-    print("Proxy listening on {}... Forwarding to {}...\n", .{ config.address, config.dest });
+    log.info("Proxy listening on {}... Forwarding to {}...", .{ config.address, config.dest });
 
     while (true) {
         const client = server.accept() catch |err| {
-            print("Failed to accept connection: {}\n", .{err});
+            log.err("Failed to accept connection: {}", .{err});
             continue;
         };
-        print("Client connected from: {}\n", .{client.address});
+        log.info("Client connected from: {}", .{client.address});
         _ = try Thread.spawn(.{}, handleClientThread, .{ allocator, &client.stream, config });
     }
 }
@@ -58,21 +58,21 @@ fn handleClientThread(_: std.mem.Allocator, stream: *const net.Stream, config: *
         if (fds[0].revents & std.posix.POLL.IN != 0) {
             const bytes_read = try scanAndForward(&buffer, stream, &dest_stream, config.keyword);
             if (bytes_read == 0) {
-                print("Stream disconnected\n", .{});
+                log.info("Stream disconnected", .{});
                 break;
             }
-            print("Forwarded {d} bytes to dest\n", .{bytes_read});
+            log.info("Forwarded {d} bytes to dest", .{bytes_read});
         }
         if (fds[1].revents & std.posix.POLL.IN != 0) {
             const bytes_read = try forward(&buffer, &dest_stream, stream);
             if (bytes_read == 0) {
-                print("Dest disconnected\n", .{});
+                log.info("Dest disconnected", .{});
                 break;
             }
-            print("Forwarded {d} bytes to src\n", .{bytes_read});
+            log.info("Forwarded {d} bytes to src", .{bytes_read});
         }
     }
-    print("Finished forwarding to dest\n", .{});
+    log.info("Finished forwarding to dest", .{});
 }
 
 fn scanAndForward(buffer: *[1024]u8, src: *const net.Stream, dest: *const net.Stream, keyword: []const u8) !usize {
@@ -82,7 +82,7 @@ fn scanAndForward(buffer: *[1024]u8, src: *const net.Stream, dest: *const net.St
     }
 
     if (std.mem.indexOf(u8, buffer[0..bytes_read], keyword)) |_| {
-        print("Keyword '{s}' found in '{s}', dropping...\n", .{ keyword, buffer[0..bytes_read] });
+        log.warn("Keyword '{s}' found in '{s}', dropping...", .{ keyword, buffer[0..bytes_read] });
         return 0; // Drop the packet if keyword is found
     }
 
