@@ -2,22 +2,34 @@ const std = @import("std");
 const net = std.net;
 const print = std.debug.print;
 
+pub const EchoServer = struct {
+    allocator: std.mem.Allocator,
+    address: net.Address,
+    isUp: bool = true,
+};
+
 // utility echo server for testing the proxy
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const address = try net.Address.parseIp("127.0.0.1", 8081);
+    var context = EchoServer{
+        .allocator = allocator,
+        .address = try net.Address.parseIp("127.0.0.1", 8081),
+    };
+    try run(&context);
+}
 
-    var server = try address.listen(.{
+pub fn run(ctx: *EchoServer) !void {
+    var server = try ctx.address.listen(.{
         .reuse_address = true,
     });
     defer server.deinit();
 
-    print("Server listening on {}...\n", .{address});
+    print("Server listening on {}...\n", .{ctx.address});
 
-    while (true) {
+    while (ctx.isUp) {
         var client = server.accept() catch |err| {
             print("Failed to accept connection: {}\n", .{err});
             continue;
@@ -26,10 +38,11 @@ pub fn main() !void {
 
         print("Client connected from: {}\n", .{client.address});
 
-        handleClient(allocator, &client.stream) catch |err| {
+        handleClient(ctx.allocator, &client.stream) catch |err| {
             print("Error handling client: {}\n", .{err});
         };
     }
+    print("Server shutting down...\n", .{});
 }
 
 fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
