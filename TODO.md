@@ -2,4 +2,6 @@
 - parse http request
 - read config from file
 - more elaborate keyword filtering
-- write benchmark
+- add benchmark
+- watch config file for changes
+- compatibility with core-ruleset
