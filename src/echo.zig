@@ -25,6 +25,7 @@ pub fn run(ctx: *EchoServer) !void {
     var server = try ctx.address.listen(.{
         .reuse_address = true,
     });
+    ctx.address = server.listen_address;
     defer server.deinit();
 
     print("Server listening on {}...\n", .{ctx.address});
