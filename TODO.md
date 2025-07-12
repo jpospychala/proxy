@@ -1,4 +1,3 @@
-- add negative test
 - parse http request
 - read config from file
 - more elaborate keyword filtering

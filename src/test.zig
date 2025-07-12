@@ -9,35 +9,31 @@ test "end-2-end test" {
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0),
     };
-    const echoT = try Thread.spawn(.{}, echo.run, .{&echoServer});
-    defer echoT.join();
-    defer echoServer.isUp = false;
+    try echoServer.spawn();
+    defer echoServer.shutdown();
 
-    // Wait for the echo server to bind to a port
-    while (echoServer.address.getPort() == 0) {
-        std.time.sleep(std.time.ns_per_ms);
-    }
-
-    var config = proxy.ProxyServer{
+    var proxyServer = proxy.ProxyServer{
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
         .keyword = "bomb",
     };
-    _ = try Thread.spawn(.{}, proxy.run, .{&config});
-    defer config.isUp = false;
-
-    // Wait for the echo server to bind to a port
-    while (config.address.getPort() == 0) {
-        std.time.sleep(std.time.ns_per_ms);
-    }
-
-    const client = try net.tcpConnectToAddress(try net.Address.parseIp("127.0.0.1", config.address.getPort()));
-    try client.writeAll("How are you?");
-    defer client.close();
+    try proxyServer.spawn();
+    defer proxyServer.shutdown();
 
     var buffer: [1024]u8 = undefined;
-    const bytes_read = try client.read(&buffer);
+    var n = try proxyReq(&buffer, "How are you?", proxyServer.address);
+    try std.testing.expectEqualStrings("Echo: How are you?", buffer[0..n]);
 
-    try std.testing.expectEqualStrings("Echo: How are you?", buffer[0..bytes_read]);
+    n = try proxyReq(&buffer, "bombing news?", proxyServer.address);
+    try std.testing.expectEqual(n, 0);
+}
+
+fn proxyReq(buffer: []u8, msg: []const u8, address: net.Address) !usize {
+    const client = try net.tcpConnectToAddress(address);
+    defer client.close();
+
+    try client.writeAll(msg);
+
+    return try client.read(buffer);
 }
