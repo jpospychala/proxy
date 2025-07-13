@@ -15,7 +15,7 @@ pub const EchoServer = struct {
         ctx.address = server.listen_address;
         defer server.deinit();
 
-        print("Server listening on {}...\n", .{ctx.address});
+        print("Echo Server listening on {}...\n", .{ctx.address});
 
         var fds = [_]std.posix.pollfd{
             .{ .fd = server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
@@ -28,15 +28,15 @@ pub const EchoServer = struct {
             }
 
             var client = server.accept() catch |err| {
-                print("Failed to accept connection: {}\n", .{err});
+                print("Echo Failed to accept connection: {}\n", .{err});
                 continue;
             };
             defer client.stream.close();
 
-            print("Client connected from: {}\n", .{client.address});
+            print("Echo Client connected from: {}\n", .{client.address});
 
             handleClient(ctx.allocator, &client.stream) catch |err| {
-                print("Error handling client: {}\n", .{err});
+                print("Echo Error handling client: {}\n", .{err});
             };
         }
         print("Echo server shutting down...\n", .{});
