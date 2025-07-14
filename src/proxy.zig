@@ -33,9 +33,12 @@ pub const ProxyServer = struct {
 };
 
 pub fn run(config: *ProxyServer) !void {
-    config.server = try config.address.listen(.{
+    config.server = config.address.listen(.{
         .reuse_address = true,
-    });
+    }) catch |err| {
+        log.err("Failed to start proxy server: {}", .{err});
+        return err;
+    };
     config.address = config.server.?.listen_address;
     defer config.server.?.deinit();
 
@@ -44,6 +47,12 @@ pub fn run(config: *ProxyServer) !void {
     var fds = [_]std.posix.pollfd{
         .{ .fd = config.server.?.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
     };
+
+    var pool: Thread.Pool = undefined;
+    try pool.init(.{
+        .allocator = config.allocator,
+    });
+    defer pool.deinit();
 
     while (config.isUp) {
         _ = try std.posix.poll(&fds, 100); // 100 ms timeout
@@ -56,17 +65,27 @@ pub fn run(config: *ProxyServer) !void {
             continue;
         };
         log.info("Client connected from: {}", .{client.address});
-        _ = try Thread.spawn(.{}, handleClientThread, .{ config.allocator, &client.stream, config });
+        try pool.spawn(handleClientThread, .{ config.allocator, &client.stream, config });
     }
 
     log.info("Proxy server shutting down...", .{});
 }
 
-fn handleClientThread(_: std.mem.Allocator, stream: *const net.Stream, config: *const ProxyServer) !void {
-    defer stream.close();
+fn handleClientThread(allocator: std.mem.Allocator, stream: *const net.Stream, config: *const ProxyServer) void {
+    defer if (config.isUp) stream.close();
+    handleClientThreadWithErrs(allocator, stream, config) catch |err| {
+        log.err("Error handling client: {}", .{err});
+    };
+}
+
+fn handleClientThreadWithErrs(_: std.mem.Allocator, stream: *const net.Stream, config: *const ProxyServer) !void {
     var buffer: [1024]u8 = undefined;
     const dest_stream = try net.tcpConnectToAddress(config.dest);
     defer dest_stream.close();
+    if (!config.isUp) {
+        log.info("Proxy server is shutting down, closing client thread", .{});
+        return;
+    }
 
     var fds = [_]std.posix.pollfd{
         .{ .fd = stream.handle, .events = std.posix.POLL.IN, .revents = 0 },

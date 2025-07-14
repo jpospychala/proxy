@@ -5,6 +5,8 @@ const echo = @import("echo.zig");
 const proxy = @import("proxy.zig");
 
 test "end-2-end test" {
+    std.testing.log_level = .info;
+
     var echoServer: echo.EchoServer = .{
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0),
@@ -20,10 +22,14 @@ test "end-2-end test" {
     };
     try proxyServer.spawn();
     defer proxyServer.shutdown();
+    defer std.debug.print("shutting down proxy server\n", .{});
 
     var buffer: [1024]u8 = undefined;
-    var n = try proxyReq(&buffer, "How are you?", proxyServer.address);
-    try std.testing.expectEqualStrings("Echo: How are you?", buffer[0..n]);
+    var n: usize = undefined;
+    for (0..125) |_| {
+        n = try proxyReq(&buffer, "How are you?", proxyServer.address);
+        try std.testing.expectEqualStrings("Echo: How are you?", buffer[0..n]);
+    }
 
     n = try proxyReq(&buffer, "bombing news?", proxyServer.address);
     try std.testing.expectEqual(n, 0);
