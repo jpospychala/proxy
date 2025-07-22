@@ -1,6 +1,6 @@
 const std = @import("std");
 const net = std.net;
-const log = std.log;
+const log = std.log.scoped(.proxy);
 const Thread = std.Thread;
 
 pub const ProxyServer = struct {
@@ -51,9 +51,11 @@ pub fn run(config: *ProxyServer) !void {
     var pool: Thread.Pool = undefined;
     try pool.init(.{
         .allocator = config.allocator,
+        .n_jobs = 2,
     });
     defer pool.deinit();
 
+    var i: usize = 0;
     while (config.isUp) {
         _ = try std.posix.poll(&fds, 100); // 100 ms timeout
         if (fds[0].revents & std.posix.POLL.IN == 0) {
@@ -64,21 +66,27 @@ pub fn run(config: *ProxyServer) !void {
             log.err("Failed to accept connection: {}", .{err});
             continue;
         };
-        log.info("Client connected from: {}", .{client.address});
-        try pool.spawn(handleClientThread, .{ config.allocator, &client.stream, config });
+        log.debug("{d}, Client connected from: {} fd {d}", .{ i, client.address, client.stream.handle });
+        pool.spawn(handleClientThread, .{ config.allocator, client.stream, config }) catch |err| {
+            log.err("Failed to spawn client thread: {}", .{err});
+            client.stream.close();
+            continue;
+        };
+        //handleClientThread(config.allocator, client.stream, config, i);
+        i += 1;
     }
 
     log.info("Proxy server shutting down...", .{});
 }
 
-fn handleClientThread(allocator: std.mem.Allocator, stream: *const net.Stream, config: *const ProxyServer) void {
-    defer if (config.isUp) stream.close();
+fn handleClientThread(allocator: std.mem.Allocator, stream: net.Stream, config: *const ProxyServer) void {
+    defer _ = std.posix.system.close(stream.handle);
     handleClientThreadWithErrs(allocator, stream, config) catch |err| {
         log.err("Error handling client: {}", .{err});
     };
 }
 
-fn handleClientThreadWithErrs(_: std.mem.Allocator, stream: *const net.Stream, config: *const ProxyServer) !void {
+fn handleClientThreadWithErrs(_: std.mem.Allocator, stream: net.Stream, config: *const ProxyServer) !void {
     var buffer: [1024]u8 = undefined;
     const dest_stream = try net.tcpConnectToAddress(config.dest);
     defer dest_stream.close();
@@ -93,29 +101,29 @@ fn handleClientThreadWithErrs(_: std.mem.Allocator, stream: *const net.Stream, c
     };
 
     while (true) {
-        _ = try std.posix.poll(&fds, -1); // -1 means wait forever
+        _ = try std.posix.poll(&fds, 100);
 
         if (fds[0].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = try scanAndForward(&buffer, stream, &dest_stream, config.keyword);
+            const bytes_read = try scanAndForward(&buffer, stream, dest_stream, config.keyword);
             if (bytes_read == 0) {
                 log.info("Stream disconnected", .{});
                 break;
             }
-            log.info("Forwarded {d} bytes to dest", .{bytes_read});
+            log.debug("Forwarded {d} bytes to dest", .{bytes_read});
         }
         if (fds[1].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = try forward(&buffer, &dest_stream, stream);
+            const bytes_read = try forward(&buffer, dest_stream, stream);
             if (bytes_read == 0) {
                 log.info("Dest disconnected", .{});
                 break;
             }
-            log.info("Forwarded {d} bytes to src", .{bytes_read});
+            log.debug("Forwarded {d} bytes to src", .{bytes_read});
         }
     }
     log.info("Finished forwarding to dest", .{});
 }
 
-fn scanAndForward(buffer: *[1024]u8, src: *const net.Stream, dest: *const net.Stream, keyword: []const u8) !usize {
+fn scanAndForward(buffer: *[1024]u8, src: net.Stream, dest: net.Stream, keyword: []const u8) !usize {
     const bytes_read = try src.read(buffer);
     if (bytes_read == 0) {
         return 0;
@@ -130,7 +138,7 @@ fn scanAndForward(buffer: *[1024]u8, src: *const net.Stream, dest: *const net.St
     return bytes_read;
 }
 
-fn forward(buffer: *[1024]u8, src: *const net.Stream, dest: *const net.Stream) !usize {
+fn forward(buffer: *[1024]u8, src: net.Stream, dest: net.Stream) !usize {
     const bytes_read = try src.read(buffer);
     if (bytes_read > 0) {
         _ = try dest.writeAll(buffer[0..bytes_read]);

@@ -2,11 +2,14 @@ const std = @import("std");
 const net = std.net;
 const print = std.debug.print;
 
+const log = std.log.scoped(.echo);
+
 pub const EchoServer = struct {
     allocator: std.mem.Allocator,
     address: net.Address,
     isUp: bool = true,
     thread: ?std.Thread = null,
+    n_jobs: ?usize = null,
 
     pub fn run(ctx: *EchoServer) !void {
         var server = try ctx.address.listen(.{
@@ -15,11 +18,18 @@ pub const EchoServer = struct {
         ctx.address = server.listen_address;
         defer server.deinit();
 
-        print("Echo Server listening on {}...\n", .{ctx.address});
+        log.info("Echo Server listening on {}...\n", .{ctx.address});
 
         var fds = [_]std.posix.pollfd{
             .{ .fd = server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
         };
+
+        var pool: std.Thread.Pool = undefined;
+        try pool.init(.{
+            .allocator = ctx.allocator,
+            .n_jobs = ctx.n_jobs,
+        });
+        defer pool.deinit();
 
         while (ctx.isUp) {
             _ = try std.posix.poll(&fds, 100); // 100 ms timeout
@@ -28,18 +38,18 @@ pub const EchoServer = struct {
             }
 
             var client = server.accept() catch |err| {
-                print("Echo Failed to accept connection: {}\n", .{err});
+                log.err("Echo Failed to accept connection: {}\n", .{err});
                 continue;
             };
-            defer client.stream.close();
 
-            print("Echo Client connected from: {}\n", .{client.address});
+            log.debug("Echo Client connected from: {}\n", .{client.address});
 
-            handleClient(ctx.allocator, &client.stream) catch |err| {
-                print("Echo Error handling client: {}\n", .{err});
+            pool.spawn(handleClientThread, .{ ctx.allocator, &client.stream }) catch |err| {
+                log.err("Echo Failed to spawn client handler: {}\n", .{err});
+                continue;
             };
         }
-        print("Echo server shutting down...\n", .{});
+        log.info("Echo server shutting down...\n", .{});
     }
 
     pub fn spawn(ctx: *EchoServer) !void {
@@ -51,7 +61,7 @@ pub const EchoServer = struct {
 
         // Wait for the echo server to bind to a port
         while (ctx.address.getPort() == 0) {
-            std.time.sleep(std.time.ns_per_ms);
+            std.Thread.sleep(std.time.ns_per_ms);
         }
     }
 
@@ -76,28 +86,42 @@ pub fn main() !void {
     try context.run();
 }
 
+fn handleClientThread(allocator: std.mem.Allocator, stream: *net.Stream) void {
+    defer {
+        log.debug("Echo Client disconnected\n", .{});
+    }
+    defer _ = std.posix.system.close(stream.handle);
+    handleClient(allocator, stream) catch |ex| {
+        log.err("Echo Error handling client: {}\n", .{ex});
+    };
+}
+
 fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
     var buffer: [1024]u8 = undefined;
 
     while (true) {
         const bytes_read = try stream.read(&buffer);
         if (bytes_read == 0) {
-            print("Client disconnected\n", .{});
+            log.info("Echo Client disconnected\n", .{});
             return;
         }
 
         const received_data = buffer[0..bytes_read];
-        print("Received: {s}\n", .{received_data});
+        log.debug("Echo Received: {s}\n", .{received_data});
 
         if (std.mem.indexOf(u8, received_data, "quit")) |_| {
-            print("Client requested to quit\n", .{});
+            log.debug("Echo Client requested to quit\n", .{});
             return;
+        }
+
+        if (std.mem.indexOf(u8, received_data, "sleep")) |_| {
+            log.debug("Echo Client requested to sleep\n", .{});
+            std.Thread.sleep(2 * std.time.ns_per_s); // sleep for 2 seconds
         }
 
         const response = try std.fmt.allocPrint(allocator, "Echo: {s}", .{received_data});
         defer allocator.free(response);
 
         _ = try stream.writeAll(response);
-        print("Sent response to client\n", .{});
     }
 }
