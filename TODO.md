@@ -4,3 +4,4 @@
 - add benchmark
 - watch config file for changes
 - compatibility with core-ruleset
+- worker threads now work on single connection, which may starve other connections. worker threads should work with multiple connections
