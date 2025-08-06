@@ -10,7 +10,9 @@ pub fn main() !void {
         .allocator = gpa.allocator(),
         .address = try net.Address.parseIp("127.0.0.1", 8080),
         .dest = try net.Address.parseIp("127.0.0.1", 8081),
-        .keyword = "bomb",
+        .handler = proxy.Handler{
+            .keyword = "bomb",
+        },
     };
 
     try proxy.run(&proxyServer);
