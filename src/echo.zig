@@ -18,7 +18,7 @@ pub const EchoServer = struct {
         ctx.address = server.listen_address;
         defer server.deinit();
 
-        log.info("Echo Server listening on {}...\n", .{ctx.address});
+        log.info("Echo Server listening on {any}...\n", .{ctx.address});
 
         var fds = [_]std.posix.pollfd{
             .{ .fd = server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
@@ -38,14 +38,14 @@ pub const EchoServer = struct {
             }
 
             var client = server.accept() catch |err| {
-                log.err("Echo Failed to accept connection: {}\n", .{err});
+                log.err("Echo Failed to accept connection: {any}\n", .{err});
                 continue;
             };
 
-            log.debug("Echo Client connected from: {}\n", .{client.address});
+            log.debug("Echo Client connected from: {any}\n", .{client.address});
 
             pool.spawn(handleClientThread, .{ ctx.allocator, &client.stream }) catch |err| {
-                log.err("Echo Failed to spawn client handler: {}\n", .{err});
+                log.err("Echo Failed to spawn client handler: {any}\n", .{err});
                 continue;
             };
         }
@@ -90,19 +90,24 @@ fn handleClientThread(allocator: std.mem.Allocator, stream: *net.Stream) void {
     defer {
         log.debug("Echo Client disconnected\n", .{});
     }
-    defer _ = std.posix.system.close(stream.handle);
     handleClient(allocator, stream) catch |ex| {
-        log.err("Echo Error handling client: {}\n", .{ex});
+        log.err("Echo Error handling client: {any}\n", .{ex});
+        if (@errorReturnTrace()) |err| {
+            std.debug.dumpStackTrace(err.*);
+        }
     };
 }
 
 fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
     var buffer: [1024]u8 = undefined;
 
+    std.debug.print("FD {d}\n", .{stream.handle});
+
     while (true) {
         const bytes_read = try stream.read(&buffer);
         if (bytes_read == 0) {
             log.info("Echo Client disconnected\n", .{});
+            _ = std.posix.system.close(stream.handle);
             return;
         }
 
@@ -111,6 +116,7 @@ fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
 
         if (std.mem.indexOf(u8, received_data, "quit")) |_| {
             log.debug("Echo Client requested to quit\n", .{});
+            _ = std.posix.system.close(stream.handle);
             return;
         }
 

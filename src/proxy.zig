@@ -20,7 +20,7 @@ pub const ProxyServer = struct {
         config.thread = try std.Thread.spawn(.{}, run, .{config});
         // Wait for the proxy server to bind to a port
         while (config.address.getPort() == 0) {
-            std.time.sleep(std.time.ns_per_ms);
+            std.Thread.sleep(std.time.ns_per_ms);
         }
     }
 
@@ -64,13 +64,13 @@ pub fn run(config: *ProxyServer) !void {
     config.server = config.address.listen(.{
         .reuse_address = true,
     }) catch |err| {
-        log.err("Failed to start proxy server: {}", .{err});
+        log.err("Failed to start proxy server: {any}", .{err});
         return err;
     };
     config.address = config.server.?.listen_address;
     defer config.server.?.deinit();
 
-    log.info("Proxy listening on {}... Forwarding to {}...", .{ config.address, config.dest });
+    log.info("Proxy listening on {any}... Forwarding to {any}...", .{ config.address, config.dest });
 
     var fds = [_]std.posix.pollfd{
         .{ .fd = config.server.?.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
@@ -91,12 +91,12 @@ pub fn run(config: *ProxyServer) !void {
         }
 
         const client = config.server.?.accept() catch |err| {
-            log.err("Failed to accept connection: {}", .{err});
+            log.err("Failed to accept connection: {any}", .{err});
             continue;
         };
-        log.debug("{d}, Client connected from: {} fd {d}", .{ i, client.address, client.stream.handle });
+        log.debug("{d}, Client connected from: {any} fd {d}", .{ i, client.address, client.stream.handle });
         pool.spawn(handleClientThread, .{ client.stream, config }) catch |err| {
-            log.err("Failed to spawn client thread: {}", .{err});
+            log.err("Failed to spawn client thread: {any}", .{err});
             client.stream.close();
             continue;
         };
@@ -110,7 +110,7 @@ pub fn run(config: *ProxyServer) !void {
 fn handleClientThread(stream: net.Stream, config: *ProxyServer) void {
     defer _ = std.posix.system.close(stream.handle);
     handleClientThreadWithErrs(stream, config) catch |err| {
-        log.err("Error handling client: {}", .{err});
+        log.err("Error handling client: {any}", .{err});
     };
 }
 
