@@ -1,7 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const print = std.debug.print;
-
+const linux = std.os.linux;
 const log = std.log.scoped(.echo);
 
 pub const EchoServer = struct {
@@ -20,9 +20,6 @@ pub const EchoServer = struct {
 
         log.info("Echo Server listening on {any}...\n", .{ctx.address});
 
-        var fds = [_]std.posix.pollfd{
-            .{ .fd = server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
-        };
 
         var pool: std.Thread.Pool = undefined;
         try pool.init(.{
@@ -31,25 +28,42 @@ pub const EchoServer = struct {
         });
         defer pool.deinit();
 
+        const epfd = try std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC);
+        {
+            var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } }; 
+            try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, server.stream.handle, &e);  
+        }
         while (ctx.isUp) {
-            _ = try std.posix.poll(&fds, 100); // 100 ms timeout
-            if (fds[0].revents & std.posix.POLL.IN == 0) {
-                continue; // no incoming connections
+            var in_events = [_]linux.epoll_event{
+                .{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } } 
+            };
+            const count = std.os.linux.epoll_wait(epfd, &in_events, in_events.len, 100); // 100 ms timeout
+            if (count < 1) { // TODO ignoring an error -1 here
+                continue;
             }
 
-            var client = server.accept() catch |err| {
-                log.err("Echo Failed to accept connection: {any}\n", .{err});
-                continue;
-            };
-
-            log.debug("Echo Client connected from: {any}\n", .{client.address});
-
-            pool.spawn(handleClientThread, .{ ctx.allocator, &client.stream }) catch |err| {
-                log.err("Echo Failed to spawn client handler: {any}\n", .{err});
-                continue;
-            };
+            if (in_events[0].data.u32 == 0) { // server.accept 
+                const client = server.accept() catch |err| {
+                    log.err("Echo Failed to accept connection: {any}\n", .{err});
+                    continue;
+                };
+                
+                {
+                    var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = client.stream.handle } }; 
+                    try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, client.stream.handle, &e);  
+                }
+                log.debug("Echo Client connected from: {any}\n", .{client.address});
+    
+            } else { // client socket
+                var stream = net.Stream{ .handle = in_events[0].data.fd };
+                handleClient(ctx.allocator, &stream) catch |ex| {
+                    log.err("Echo Error handling client: {any}\n", .{ex});
+                    if (@errorReturnTrace()) |err| {
+                      std.debug.dumpStackTrace(err.*);
+                    }
+                };
+            }
         }
-        log.info("Echo server shutting down...\n", .{});
     }
 
     pub fn spawn(ctx: *EchoServer) !void {
@@ -84,18 +98,6 @@ pub fn main() !void {
         .address = try net.Address.parseIp("127.0.0.1", 8081),
     };
     try context.run();
-}
-
-fn handleClientThread(allocator: std.mem.Allocator, stream: *net.Stream) void {
-    defer {
-        log.debug("Echo Client disconnected\n", .{});
-    }
-    handleClient(allocator, stream) catch |ex| {
-        log.err("Echo Error handling client: {any}\n", .{ex});
-        if (@errorReturnTrace()) |err| {
-            std.debug.dumpStackTrace(err.*);
-        }
-    };
 }
 
 fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
