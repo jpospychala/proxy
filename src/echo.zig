@@ -8,8 +8,14 @@ pub const EchoServer = struct {
     allocator: std.mem.Allocator,
     address: net.Address,
     isUp: bool = true,
-    thread: ?std.Thread = null,
-    n_jobs: ?usize = null,
+    pool: std.Thread.Pool = undefined,
+    n_jobs: usize = 1,
+
+    pub fn runNoErr(ctx: *EchoServer) void {
+        ctx.run() catch |err| {
+            log.err("Thread failed: {any}\n", .{err});
+        };
+    }
 
     pub fn run(ctx: *EchoServer) !void {
         var server = try ctx.address.listen(.{
@@ -20,46 +26,35 @@ pub const EchoServer = struct {
 
         log.info("Echo Server listening on {any}...\n", .{ctx.address});
 
-
-        var pool: std.Thread.Pool = undefined;
-        try pool.init(.{
-            .allocator = ctx.allocator,
-            .n_jobs = ctx.n_jobs,
-        });
-        defer pool.deinit();
-
         const epfd = try std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC);
         {
-            var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } }; 
-            try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, server.stream.handle, &e);  
+            var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } };
+            try std.posix.epoll_ctl(epfd, linux.EPOLL.CTL_ADD, server.stream.handle, &e);
         }
         while (ctx.isUp) {
-            var in_events = [_]linux.epoll_event{
-                .{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } } 
-            };
-            const count = std.os.linux.epoll_wait(epfd, &in_events, in_events.len, 100); // 100 ms timeout
+            var in_events = [_]linux.epoll_event{.{ .events = linux.EPOLL.IN, .data = .{ .fd = 0 } }};
+            const count = linux.epoll_wait(epfd, &in_events, in_events.len, 100); // 100 ms timeout
             if (count < 1) { // TODO ignoring an error -1 here
                 continue;
             }
 
-            if (in_events[0].data.u32 == 0) { // server.accept 
+            if (in_events[0].data.u32 == 0) { // server.accept
                 const client = server.accept() catch |err| {
                     log.err("Echo Failed to accept connection: {any}\n", .{err});
                     continue;
                 };
-                
+
                 {
-                    var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = client.stream.handle } }; 
-                    try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, client.stream.handle, &e);  
+                    var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = client.stream.handle } };
+                    try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, client.stream.handle, &e);
                 }
                 log.debug("Echo Client connected from: {any}\n", .{client.address});
-    
             } else { // client socket
                 var stream = net.Stream{ .handle = in_events[0].data.fd };
                 handleClient(ctx.allocator, &stream) catch |ex| {
                     log.err("Echo Error handling client: {any}\n", .{ex});
                     if (@errorReturnTrace()) |err| {
-                      std.debug.dumpStackTrace(err.*);
+                        std.debug.dumpStackTrace(err.*);
                     }
                 };
             }
@@ -67,11 +62,14 @@ pub const EchoServer = struct {
     }
 
     pub fn spawn(ctx: *EchoServer) !void {
-        if (ctx.thread != null) {
-            return error.AlreadyRunning;
-        }
+        try ctx.pool.init(.{
+            .allocator = ctx.allocator,
+            .n_jobs = ctx.n_jobs,
+        });
 
-        ctx.thread = try std.Thread.spawn(.{}, run, .{ctx});
+        for (0..ctx.n_jobs) |_| {
+            try ctx.pool.spawn(runNoErr, .{ctx});
+        }
 
         // Wait for the echo server to bind to a port
         while (ctx.address.getPort() == 0) {
@@ -80,10 +78,8 @@ pub const EchoServer = struct {
     }
 
     pub fn shutdown(ctx: *EchoServer) void {
-        if (ctx.thread) |t| {
-            ctx.isUp = false;
-            t.join();
-        }
+        ctx.isUp = false;
+        ctx.pool.deinit();
     }
 };
 
@@ -103,7 +99,7 @@ pub fn main() !void {
 fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
     var buffer: [1024]u8 = undefined;
 
-    std.debug.print("FD {d}\n", .{stream.handle});
+    //std.debug.print("FD {d}\n", .{stream.handle});
 
     while (true) {
         const bytes_read = try stream.read(&buffer);
