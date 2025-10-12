@@ -5,7 +5,7 @@ const echo = @import("echo.zig");
 const proxy = @import("proxy.zig");
 
 test "proxy benchmark" {
-    std.testing.log_level = .warn;
+    std.testing.log_level = .info;
 
     var echoServer: echo.EchoServer = .{
         .allocator = std.testing.allocator,
@@ -92,9 +92,9 @@ fn proxyReq(buffer: []u8, msg: []const u8, address: net.Address) !usize {
     var socklen: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
     try std.posix.getsockname(client.handle, &sockaddr, &socklen);
 
-    const sa: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&sockaddr));
-    _ = std.mem.bigToNative(u16, sa.port);
-    // std.debug.print("Test is sending {s} to {any} ephemeral port {d}\n", .{ msg, address, port });
+    //const sa: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&sockaddr));
+    //const port = std.mem.bigToNative(u16, sa.port);
+    //std.debug.print("Test is sending {s} to {f} ephemeral port {d}\n", .{ msg, address, port });
     try client.writeAll(msg);
 
     return try client.read(buffer);

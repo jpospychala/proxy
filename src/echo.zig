@@ -24,7 +24,7 @@ pub const EchoServer = struct {
         ctx.address = server.listen_address;
         defer server.deinit();
 
-        log.info("Echo Server listening on {any}...\n", .{ctx.address});
+        log.info("Echo Server listening on {f}...\n", .{ctx.address});
 
         const epfd = try std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC);
         {
@@ -48,7 +48,7 @@ pub const EchoServer = struct {
                     var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .fd = client.stream.handle } };
                     try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, client.stream.handle, &e);
                 }
-                log.debug("Echo Client connected from: {any}\n", .{client.address});
+                log.debug("Echo Client connected from: {f}\n", .{client.address});
             } else { // client socket
                 var stream = net.Stream{ .handle = in_events[0].data.fd };
                 handleClient(ctx.allocator, &stream) catch |ex| {
@@ -59,6 +59,8 @@ pub const EchoServer = struct {
                 };
             }
         }
+
+        log.info("Echo server shutting down\n", .{});
     }
 
     pub fn spawn(ctx: *EchoServer) !void {
@@ -104,7 +106,7 @@ fn handleClient(allocator: std.mem.Allocator, stream: *net.Stream) !void {
     while (true) {
         const bytes_read = try stream.read(&buffer);
         if (bytes_read == 0) {
-            log.info("Echo Client disconnected\n", .{});
+            log.debug("Echo Client disconnected\n", .{});
             _ = std.posix.system.close(stream.handle);
             return;
         }

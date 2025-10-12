@@ -15,5 +15,5 @@ pub fn main() !void {
         },
     };
 
-    try proxy.run(&proxyServer);
+    try proxyServer.run();
 }

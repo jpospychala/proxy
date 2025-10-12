@@ -1,23 +1,142 @@
 const std = @import("std");
 const net = std.net;
 const log = std.log.scoped(.proxy);
+const linux = std.os.linux;
 const Thread = std.Thread;
+
+pub const Conn = struct {
+    srcfd: i32 = 0,
+    dstfd: i32 = 0,
+};
+
+pub const Link = union(enum) {
+    server: i32,
+    client: Conn,
+};
+
+const Dir = enum { upstream, downstream };
 
 pub const ProxyServer = struct {
     allocator: std.mem.Allocator,
     address: net.Address,
     dest: net.Address,
     handler: Handler,
-    server: ?net.Server = undefined,
     isUp: bool = true,
-    thread: ?Thread = null,
+    pool: Thread.Pool = undefined,
 
-    pub fn spawn(config: *ProxyServer) !void {
-        if (config.thread) |_| {
-            return error.AlreadyRunning;
+    pub fn runNoErr(ctx: *ProxyServer) void {
+        ctx.run() catch |err| {
+            log.err("Thread failed: {any}\n", .{err});
+        };
+    }
+
+    pub fn run(config: *ProxyServer) !void {
+        var server = config.address.listen(.{
+            .reuse_address = true,
+        }) catch |err| {
+            log.err("Failed to start proxy server: {any}", .{err});
+            return err;
+        };
+        config.address = server.listen_address;
+        defer server.deinit();
+
+        log.info("Proxy listening on {f}... Forwarding to {f}...", .{ config.address, config.dest });
+
+        var links: [1024]?Link = @splat(null);
+        links[0] = .{ .server = server.stream.handle };
+
+        const epfd = try std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC);
+        {
+            var e = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .u32 = 0 } };
+            try std.posix.epoll_ctl(epfd, linux.EPOLL.CTL_ADD, server.stream.handle, &e);
         }
 
-        config.thread = try std.Thread.spawn(.{}, run, .{config});
+        var in_events: [1024]linux.epoll_event = @splat(.{ .events = 0, .data = .{ .u32 = 0 } });
+        while (config.isUp) {
+            const count = linux.epoll_wait(epfd, &in_events, in_events.len, 100); // 100 ms timeout
+            if (count < 0) {
+                std.debug.panic("epoll_wait returned -1\n", .{});
+            }
+
+            for (0..count) |i| {
+                const in_event = in_events[i];
+                log.debug("Event {any}\n", .{in_event});
+                const link = links[@mod(in_event.data.u32, links.len)].?;
+
+                switch (link) {
+                    .server => |_| {
+                        const client = server.accept() catch |err| {
+                            log.err("Proxy Failed to accept connection: {any}\n", .{err});
+                            continue;
+                        };
+
+                        if (nextIdx(links[0..])) |j| {
+                            const dest_stream = net.tcpConnectToAddress(config.dest) catch |err| {
+                                log.err("Proxy Failed to connect to upstream {any}\n", .{err});
+                                std.posix.close(client.stream.handle);
+                                continue;
+                            };
+
+                            links[j] = .{ .client = .{ .srcfd = client.stream.handle, .dstfd = dest_stream.handle } };
+                            {
+                                var e = linux.epoll_event{ .events = linux.EPOLL.IN | linux.EPOLL.HUP, .data = .{ .u32 = j } };
+                                try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, client.stream.handle, &e);
+                            }
+                            {
+                                var e = linux.epoll_event{ .events = linux.EPOLL.IN | linux.EPOLL.HUP, .data = .{ .u32 = j + @as(u32, @intCast(links.len)) } };
+                                try std.posix.epoll_ctl(epfd, std.os.linux.EPOLL.CTL_ADD, dest_stream.handle, &e);
+                            }
+
+                            log.debug("Proxy Client connected from: {f}\n", .{client.address});
+                        } else {
+                            std.debug.panic("Whops no slot for connection", .{});
+                        }
+                    },
+                    .client => |conn| {
+                        const j = in_event.data.u32;
+                        // std.debug.print("Client socket {d}\n", .{j});
+                        if (j < links.len) {
+                            //   std.debug.print("Src read\n", .{});
+                            const src = net.Stream{ .handle = conn.srcfd };
+                            const dst = net.Stream{ .handle = conn.dstfd };
+                            const bytes_read = try config.handler.upstream(src, dst);
+                            // std.debug.print("Sent {d} bytes\n", .{bytes_read});
+                            if (bytes_read == 0) {
+                                //log.info("Src disconnected", .{});
+                                std.posix.close(conn.srcfd);
+                                std.posix.close(conn.dstfd);
+                                links[j] = null;
+                            }
+                        } else {
+                            //std.debug.print("Dst read\n", .{});
+                            const src = net.Stream{ .handle = conn.srcfd };
+                            const dst = net.Stream{ .handle = conn.dstfd };
+                            const bytes_read = try config.handler.downstream(dst, src);
+                            //std.debug.print("Sent {d} bytes\n", .{bytes_read});
+                            if (bytes_read == 0) {
+                                //log.info("Dest disconnected", .{});
+                                std.posix.close(conn.srcfd);
+                                std.posix.close(conn.dstfd);
+                                links[j - links.len] = null;
+                            }
+                        }
+                    },
+                }
+            }
+        }
+        log.info("Proxy server shutting down...", .{});
+    }
+
+    pub fn spawn(config: *ProxyServer) !void {
+        try config.pool.init(.{
+            .allocator = config.allocator,
+            .n_jobs = 2,
+        });
+
+        for (0..config.pool.threads.len) |_| {
+            try config.pool.spawn(runNoErr, .{config});
+        }
+
         // Wait for the proxy server to bind to a port
         while (config.address.getPort() == 0) {
             std.Thread.sleep(std.time.ns_per_ms);
@@ -25,10 +144,8 @@ pub const ProxyServer = struct {
     }
 
     pub fn shutdown(config: *ProxyServer) void {
-        if (config.thread) |t| {
-            config.isUp = false;
-            t.join();
-        }
+        config.isUp = false;
+        config.pool.deinit();
     }
 };
 
@@ -60,92 +177,11 @@ pub const Handler = struct {
     }
 };
 
-pub fn run(config: *ProxyServer) !void {
-    config.server = config.address.listen(.{
-        .reuse_address = true,
-    }) catch |err| {
-        log.err("Failed to start proxy server: {any}", .{err});
-        return err;
-    };
-    config.address = config.server.?.listen_address;
-    defer config.server.?.deinit();
-
-    log.info("Proxy listening on {any}... Forwarding to {any}...", .{ config.address, config.dest });
-
-    var fds = [_]std.posix.pollfd{
-        .{ .fd = config.server.?.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
-    };
-
-    var pool: Thread.Pool = undefined;
-    try pool.init(.{
-        .allocator = config.allocator,
-        .n_jobs = 2,
-    });
-    defer pool.deinit();
-
-    var i: usize = 0;
-    while (config.isUp) {
-        _ = try std.posix.poll(&fds, 100); // 100 ms timeout
-        if (fds[0].revents & std.posix.POLL.IN == 0) {
-            continue; // no incoming connections
-        }
-
-        const client = config.server.?.accept() catch |err| {
-            log.err("Failed to accept connection: {any}", .{err});
-            continue;
-        };
-        log.debug("{d}, Client connected from: {any} fd {d}", .{ i, client.address, client.stream.handle });
-        pool.spawn(handleClientThread, .{ client.stream, config }) catch |err| {
-            log.err("Failed to spawn client thread: {any}", .{err});
-            client.stream.close();
-            continue;
-        };
-        //handleClientThread(config.allocator, client.stream, config, i);
-        i += 1;
-    }
-
-    log.info("Proxy server shutting down...", .{});
-}
-
-fn handleClientThread(stream: net.Stream, config: *ProxyServer) void {
-    defer _ = std.posix.system.close(stream.handle);
-    handleClientThreadWithErrs(stream, config) catch |err| {
-        log.err("Error handling client: {any}", .{err});
-    };
-}
-
-fn handleClientThreadWithErrs(stream: net.Stream, config: *ProxyServer) !void {
-    const dest_stream = try net.tcpConnectToAddress(config.dest);
-    defer dest_stream.close();
-    if (!config.isUp) {
-        log.info("Proxy server is shutting down, closing client thread", .{});
-        return;
-    }
-
-    var fds = [_]std.posix.pollfd{
-        .{ .fd = stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = dest_stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
-    };
-
-    while (true) {
-        _ = try std.posix.poll(&fds, 100);
-
-        if (fds[0].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = try config.handler.downstream(stream, dest_stream);
-            if (bytes_read == 0) {
-                log.info("Stream disconnected", .{});
-                break;
-            }
-            log.debug("Forwarded {d} bytes to dest", .{bytes_read});
-        }
-        if (fds[1].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = try config.handler.upstream(dest_stream, stream);
-            if (bytes_read == 0) {
-                log.info("Dest disconnected", .{});
-                break;
-            }
-            log.debug("Forwarded {d} bytes to src", .{bytes_read});
+fn nextIdx(links: []?Link) ?u32 {
+    for (0..links.len) |i| {
+        if (links[i] == null) {
+            return @intCast(i);
         }
     }
-    log.info("Finished forwarding to dest", .{});
+    return null;
 }
