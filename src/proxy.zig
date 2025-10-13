@@ -61,7 +61,8 @@ pub const ProxyServer = struct {
             for (0..count) |i| {
                 const in_event = in_events[i];
                 log.debug("Event {any}\n", .{in_event});
-                const link = links[@mod(in_event.data.u32, links.len)].?;
+                const absj = @mod(in_event.data.u32, links.len);
+                const link = links[absj].?;
 
                 switch (link) {
                     .server => |_| {
@@ -94,31 +95,22 @@ pub const ProxyServer = struct {
                     },
                     .client => |conn| {
                         const j = in_event.data.u32;
-                        // std.debug.print("Client socket {d}\n", .{j});
-                        if (j < links.len) {
-                            //   std.debug.print("Src read\n", .{});
-                            const src = net.Stream{ .handle = conn.srcfd };
-                            const dst = net.Stream{ .handle = conn.dstfd };
-                            const bytes_read = try config.handler.upstream(src, dst);
-                            // std.debug.print("Sent {d} bytes\n", .{bytes_read});
-                            if (bytes_read == 0) {
-                                //log.info("Src disconnected", .{});
-                                std.posix.close(conn.srcfd);
-                                std.posix.close(conn.dstfd);
-                                links[j] = null;
-                            }
-                        } else {
-                            //std.debug.print("Dst read\n", .{});
-                            const src = net.Stream{ .handle = conn.srcfd };
-                            const dst = net.Stream{ .handle = conn.dstfd };
-                            const bytes_read = try config.handler.downstream(dst, src);
-                            //std.debug.print("Sent {d} bytes\n", .{bytes_read});
-                            if (bytes_read == 0) {
-                                //log.info("Dest disconnected", .{});
-                                std.posix.close(conn.srcfd);
-                                std.posix.close(conn.dstfd);
-                                links[j - links.len] = null;
-                            }
+
+                        const src = net.Stream{ .handle = conn.srcfd };
+                        const dst = net.Stream{ .handle = conn.dstfd };
+
+                        const dir: Dir = if (j < links.len) Dir.downstream else Dir.upstream;
+
+                        const bytes_read = switch (dir) {
+                            .downstream => try config.handler.copy(src, dst),
+                            .upstream => try config.handler.filter(dst, src),
+                        };
+
+                        if (bytes_read == 0) {
+                            //log.info("Src disconnected", .{});
+                            std.posix.close(conn.srcfd); // TODO is it possible that socket closed from the other end would cause some panic here?
+                            std.posix.close(conn.dstfd);
+                            links[absj] = null;
                         }
                     },
                 }
@@ -153,7 +145,7 @@ pub const Handler = struct {
     buffer: [1024]u8 = undefined,
     keyword: []const u8,
 
-    fn downstream(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
+    fn filter(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
         const bytes_read = try src.read(&this.buffer);
         if (bytes_read == 0) {
             return 0;
@@ -168,7 +160,7 @@ pub const Handler = struct {
         return bytes_read;
     }
 
-    fn upstream(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
+    fn copy(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
         const bytes_read = try src.read(&this.buffer);
         if (bytes_read > 0) {
             _ = try dest.writeAll(this.buffer[0..bytes_read]);
