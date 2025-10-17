@@ -4,6 +4,9 @@ const log = std.log.scoped(.proxy);
 const linux = std.os.linux;
 const Thread = std.Thread;
 
+const CONN_BUF_SIZE = 8096; // size of connection buffer
+const CONNS_LIMIT = 4064; // max numer of open connections
+
 pub const Conn = struct {
     srcfd: i32 = 0,
     dstfd: i32 = 0,
@@ -12,6 +15,11 @@ pub const Conn = struct {
 pub const Link = union(enum) {
     server: i32,
     client: Conn,
+};
+
+pub const ConnCtx = struct {
+    i: usize = 0,
+    buffer: [CONN_BUF_SIZE]u8 = @splat(0),
 };
 
 const Dir = enum { upstream, downstream };
@@ -39,10 +47,21 @@ pub const ProxyServer = struct {
         };
         config.address = server.listen_address;
         defer server.deinit();
-
         log.info("Proxy listening on {f}... Forwarding to {f}...", .{ config.address, config.dest });
 
-        var links: [1024]?Link = @splat(null);
+        var links = try config.allocator.alloc(?Link, CONNS_LIMIT);
+        defer config.allocator.free(links);
+        @memset(links, null);
+        var linkCtx: [CONNS_LIMIT]*ConnCtx = undefined;
+        for (0..linkCtx.len) |i| {
+            linkCtx[i] = try config.allocator.create(ConnCtx);
+        }
+        defer {
+            for (0..linkCtx.len) |i| {
+                config.allocator.destroy(linkCtx[i]);
+            }
+        }
+
         links[0] = .{ .server = server.stream.handle };
 
         const epfd = try std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC);
@@ -102,8 +121,9 @@ pub const ProxyServer = struct {
                         const dir: Dir = if (j < links.len) Dir.downstream else Dir.upstream;
 
                         const bytes_read = switch (dir) {
-                            .downstream => try config.handler.copy(src, dst),
-                            .upstream => try config.handler.filter(dst, src),
+                            //.downstream => try config.handler.copy(src, dst),
+                            .downstream => try config.handler.copyHttp(src, dst, linkCtx[absj]),
+                            .upstream => try config.handler.filter(dst, src, linkCtx[absj]),
                         };
 
                         if (bytes_read == 0) {
@@ -142,28 +162,35 @@ pub const ProxyServer = struct {
 };
 
 pub const Handler = struct {
-    buffer: [1024]u8 = undefined,
     keyword: []const u8,
 
-    fn filter(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
-        const bytes_read = try src.read(&this.buffer);
+    fn filter(this: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
+        const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read == 0) {
             return 0;
         }
 
-        if (std.mem.indexOf(u8, this.buffer[0..bytes_read], this.keyword)) |_| {
-            log.warn("Keyword '{s}' found in '{s}', dropping...", .{ this.keyword, this.buffer[0..bytes_read] });
+        if (std.mem.indexOf(u8, ctx.buffer[0..bytes_read], this.keyword)) |_| {
+            log.warn("Keyword '{s}' found in '{s}', dropping...", .{ this.keyword, ctx.buffer[0..bytes_read] });
             return 0; // Drop the packet if keyword is found
         }
 
-        _ = try dest.writeAll(this.buffer[0..bytes_read]);
+        _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
         return bytes_read;
     }
 
-    fn copy(this: *@This(), src: net.Stream, dest: net.Stream) !usize {
-        const bytes_read = try src.read(&this.buffer);
+    fn copy(_: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
+        const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read > 0) {
-            _ = try dest.writeAll(this.buffer[0..bytes_read]);
+            _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
+        }
+        return bytes_read;
+    }
+
+    fn copyHttp(_: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
+        const bytes_read = try src.read(&ctx.buffer);
+        if (bytes_read > 0) {
+            _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
         }
         return bytes_read;
     }

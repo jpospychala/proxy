@@ -4,8 +4,13 @@ const Thread = std.Thread;
 const echo = @import("echo.zig");
 const proxy = @import("proxy.zig");
 
+const TestCase = struct {
+    req: []const u8,
+    expected: []const u8,
+};
+
 test "proxy benchmark" {
-    std.testing.log_level = .info;
+    std.testing.log_level = .debug;
 
     var echoServer: echo.EchoServer = .{
         .allocator = std.testing.allocator,
@@ -27,8 +32,7 @@ test "proxy benchmark" {
     defer std.debug.print("shutting down proxy server\n", .{});
 
     var buffer: [1024]u8 = undefined;
-    var recvBuf: [1024]u8 = undefined;
-    var n: usize = undefined;
+    var actual: [1024]u8 = undefined;
 
     const count = 10000;
     var errs: usize = 0;
@@ -36,13 +40,13 @@ test "proxy benchmark" {
 
     for (0..count) |i| {
         const msg = try std.fmt.bufPrint(&buffer, "Msg {d}", .{i});
-        n = proxyReq(&recvBuf, msg, proxyServer.address) catch |err| {
+        const n = proxyReq(&actual, msg, proxyServer.address) catch |err| {
             errs += 1;
             std.debug.print("Error in proxy request: {}\n", .{err});
             continue;
         };
-        //const expected = try std.fmt.bufPrint(&buffer, "Echo: Iteration {d}", .{i});
-        //try std.testing.expectEqualStrings(expected, recvBuf[0..n]);
+        const expected = try std.fmt.bufPrint(&buffer, "Echo: Msg {d}", .{i});
+        try std.testing.expectEqualStrings(expected, actual[0..n]);
     }
 
     const elapsed = std.time.milliTimestamp() - start;
@@ -53,6 +57,41 @@ test "proxy benchmark" {
         reqs_per_sec,
         errs,
     });
+}
+
+test "http parsing" {
+    const cases = [_]TestCase{
+        .{
+            .req = "HTTP/1.0 GET /\r\n\r\n",
+            .expected = "500",
+        },
+    };
+
+    std.testing.log_level = .warn;
+
+    var echoServer: echo.EchoServer = .{
+        .allocator = std.testing.allocator,
+        .address = try net.Address.parseIp("127.0.0.1", 0),
+    };
+    try echoServer.spawn();
+    defer echoServer.shutdown();
+
+    var proxyServer = proxy.ProxyServer{
+        .allocator = std.testing.allocator,
+        .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
+        .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
+        .handler = proxy.Handler{
+            .keyword = "bomb",
+        },
+    };
+    try proxyServer.spawn();
+    defer proxyServer.shutdown();
+
+    var actual: [1024]u8 = undefined;
+    for (cases) |tc| {
+        const n = try proxyReq(&actual, tc.req, proxyServer.address);
+        try std.testing.expectEqualStrings(tc.expected, actual[0..n]);
+    }
 }
 
 test "proxy blocking text" {

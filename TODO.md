@@ -1,7 +1,7 @@
-- parse http request
-- read config from file
-- more elaborate keyword filtering
+- waf related
+-- parse http request
+-- more elaborate keyword filtering
+-- compatibility with core-ruleset
 - add benchmark
+- read config from file
 - watch config file for changes
-- compatibility with core-ruleset
-- worker threads now work on single connection, which may starve other connections. worker threads should work with multiple connections
