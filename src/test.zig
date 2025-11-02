@@ -24,7 +24,7 @@ test "proxy benchmark" {
     var copyH = copy.Copy{
         .keyword = "bomb",
     };
-    var proxyServer = proxy.ProxyServer{
+    var proxyServer = proxy.ProxyServer(copy.CopyCtx){
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
@@ -80,7 +80,7 @@ test "http parsing" {
     defer echoServer.shutdown();
 
     var httpH = http.Http{};
-    var proxyServer = proxy.ProxyServer{
+    var proxyServer = proxy.ProxyServer(http.HttpCtx){
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
@@ -109,7 +109,7 @@ test "proxy blocking text" {
     var copyH = copy.Copy{
         .keyword = "bomb",
     };
-    var proxyServer = proxy.ProxyServer{
+    var proxyServer = proxy.ProxyServer(copy.CopyCtx){
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
