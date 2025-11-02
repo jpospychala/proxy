@@ -3,6 +3,8 @@ const net = std.net;
 const Thread = std.Thread;
 const echo = @import("echo.zig");
 const proxy = @import("proxy.zig");
+const copy = @import("proto/copy.zig");
+const http = @import("proto/http.zig");
 
 const TestCase = struct {
     req: []const u8,
@@ -19,13 +21,14 @@ test "proxy benchmark" {
     try echoServer.spawn();
     defer echoServer.shutdown();
 
+    var copyH = copy.Copy{
+        .keyword = "bomb",
+    };
     var proxyServer = proxy.ProxyServer{
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
-        .handler = proxy.Handler{
-            .keyword = "bomb",
-        },
+        .handler = copyH.handler(),
     };
     try proxyServer.spawn();
     defer proxyServer.shutdown();
@@ -76,13 +79,12 @@ test "http parsing" {
     try echoServer.spawn();
     defer echoServer.shutdown();
 
+    var httpH = http.Http{};
     var proxyServer = proxy.ProxyServer{
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
-        .handler = proxy.Handler{
-            .keyword = "bomb",
-        },
+        .handler = httpH.handler(),
     };
     try proxyServer.spawn();
     defer proxyServer.shutdown();
@@ -104,13 +106,14 @@ test "proxy blocking text" {
     try echoServer.spawn();
     defer echoServer.shutdown();
 
+    var copyH = copy.Copy{
+        .keyword = "bomb",
+    };
     var proxyServer = proxy.ProxyServer{
         .allocator = std.testing.allocator,
         .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
         .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
-        .handler = proxy.Handler{
-            .keyword = "bomb",
-        },
+        .handler = copyH.handler(),
     };
     try proxyServer.spawn();
     defer proxyServer.shutdown();

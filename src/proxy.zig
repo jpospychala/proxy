@@ -122,8 +122,8 @@ pub const ProxyServer = struct {
 
                         const bytes_read = switch (dir) {
                             //.downstream => try config.handler.copy(src, dst),
-                            .downstream => try config.handler.copyHttp(src, dst, linkCtx[absj]),
-                            .upstream => try config.handler.filter(dst, src, linkCtx[absj]),
+                            .downstream => try config.handler.downstream(src, dst, linkCtx[absj]),
+                            .upstream => try config.handler.upstream(dst, src, linkCtx[absj]),
                         };
 
                         if (bytes_read == 0) {
@@ -162,39 +162,23 @@ pub const ProxyServer = struct {
 };
 
 pub const Handler = struct {
-    keyword: []const u8,
+    ptr: *anyopaque,
+    vtable: *const VTable,
 
-    fn filter(this: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
-        const bytes_read = try src.read(&ctx.buffer);
-        if (bytes_read == 0) {
-            return 0;
-        }
+    pub const VTable = struct {
+        downstream: *const fn (*anyopaque, net.Stream, net.Stream, *ConnCtx) handlerError!usize,
+        upstream: *const fn (*anyopaque, net.Stream, net.Stream, *ConnCtx) handlerError!usize,
+    };
 
-        if (std.mem.indexOf(u8, ctx.buffer[0..bytes_read], this.keyword)) |_| {
-            log.warn("Keyword '{s}' found in '{s}', dropping...", .{ this.keyword, ctx.buffer[0..bytes_read] });
-            return 0; // Drop the packet if keyword is found
-        }
-
-        _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
-        return bytes_read;
+    fn downstream(h: *Handler, src: net.Stream, dest: net.Stream, ctx: *ConnCtx) handlerError!usize {
+        return h.vtable.downstream(h.ptr, src, dest, ctx);
     }
-
-    fn copy(_: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
-        const bytes_read = try src.read(&ctx.buffer);
-        if (bytes_read > 0) {
-            _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
-        }
-        return bytes_read;
-    }
-
-    fn copyHttp(_: *@This(), src: net.Stream, dest: net.Stream, ctx: *ConnCtx) !usize {
-        const bytes_read = try src.read(&ctx.buffer);
-        if (bytes_read > 0) {
-            _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
-        }
-        return bytes_read;
+    fn upstream(h: *Handler, src: net.Stream, dest: net.Stream, ctx: *ConnCtx) handlerError!usize {
+        return h.vtable.upstream(h.ptr, src, dest, ctx);
     }
 };
+
+pub const handlerError = net.Stream.ReadError || net.Stream.WriteError;
 
 fn nextIdx(links: []?Link) ?u32 {
     for (0..links.len) |i| {
