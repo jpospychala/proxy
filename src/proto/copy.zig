@@ -3,6 +3,18 @@ const net = std.net;
 const log = std.log.scoped(.proxy);
 const proxy = @import("../proxy.zig");
 
+pub const CopyCtx = struct {
+    buffer: [proxy.CONN_BUF_SIZE]u8 = undefined,
+
+    pub fn init(a: std.mem.Allocator) !*CopyCtx {
+        return try a.create(CopyCtx);
+    }
+
+    pub fn deinit(ctx: *CopyCtx, a: std.mem.Allocator) void {
+        a.destroy(ctx);
+    }
+};
+
 pub const Copy = struct {
     keyword: []const u8,
 
@@ -38,17 +50,5 @@ pub const Copy = struct {
             _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
         }
         return bytes_read;
-    }
-};
-
-pub const CopyCtx = struct {
-    buffer: [proxy.CONN_BUF_SIZE]u8 = undefined,
-
-    pub fn init(a: std.mem.Allocator) !*CopyCtx {
-        return try a.create(CopyCtx);
-    }
-
-    pub fn deinit(ctx: *CopyCtx, a: std.mem.Allocator) void {
-        a.destroy(ctx);
     }
 };
