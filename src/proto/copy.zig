@@ -10,6 +10,10 @@ pub const CopyCtx = struct {
         return try a.create(CopyCtx);
     }
 
+    pub fn reset(_: *CopyCtx) void {
+        return;
+    }
+
     pub fn deinit(ctx: *CopyCtx, a: std.mem.Allocator) void {
         a.destroy(ctx);
     }
@@ -28,27 +32,27 @@ pub const Copy = struct {
         };
     }
 
-    fn upstream(h: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!usize {
+    fn upstream(h: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!bool {
         const this: *Copy = @ptrCast(@alignCast(h));
         const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read == 0) {
-            return 0;
+            return false;
         }
 
         if (std.mem.indexOf(u8, ctx.buffer[0..bytes_read], this.keyword)) |_| {
             log.warn("Keyword '{s}' found in '{s}', dropping...", .{ this.keyword, ctx.buffer[0..bytes_read] });
-            return 0; // Drop the packet if keyword is found
+            return false; // Drop the packet if keyword is found
         }
 
         _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
-        return bytes_read;
+        return true;
     }
 
-    fn downstream(_: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!usize {
+    fn downstream(_: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!bool {
         const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read > 0) {
             _ = try dest.writeAll(ctx.buffer[0..bytes_read]);
         }
-        return bytes_read;
+        return bytes_read > 0;
     }
 };

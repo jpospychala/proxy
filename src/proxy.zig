@@ -116,17 +116,17 @@ pub fn ProxyServer(comptime T: type) type {
 
                             const dir: Dir = if (j < links.len) Dir.downstream else Dir.upstream;
 
-                            const bytes_read = switch (dir) {
-                                //.downstream => try config.handler.copy(src, dst),
+                            const keep = switch (dir) {
                                 .downstream => try config.handler.downstream(src, dst, linkCtx[absj]),
                                 .upstream => try config.handler.upstream(dst, src, linkCtx[absj]),
                             };
 
-                            if (bytes_read == 0) {
+                            if (!keep) {
                                 //log.info("Src disconnected", .{});
                                 std.posix.close(conn.srcfd); // TODO is it possible that socket closed from the other end would cause some panic here?
                                 std.posix.close(conn.dstfd);
                                 links[absj] = null;
+                                linkCtx[absj].reset();
                             }
                         },
                     }
@@ -164,14 +164,17 @@ pub fn Handler(comptime T: type) type {
         vtable: *const VTable,
 
         pub const VTable = struct {
-            downstream: *const fn (*anyopaque, net.Stream, net.Stream, *T) handlerError!usize,
-            upstream: *const fn (*anyopaque, net.Stream, net.Stream, *T) handlerError!usize,
+            downstream: *const fn (*anyopaque, net.Stream, net.Stream, *T) handlerError!bool,
+            upstream: *const fn (*anyopaque, net.Stream, net.Stream, *T) handlerError!bool,
         };
 
-        fn downstream(h: *Handler(T), src: net.Stream, dest: net.Stream, ctx: *T) handlerError!usize {
+        // returns true = conitnue, false = terminate
+        fn downstream(h: *Handler(T), src: net.Stream, dest: net.Stream, ctx: *T) handlerError!bool {
             return h.vtable.downstream(h.ptr, src, dest, ctx);
         }
-        fn upstream(h: *Handler(T), src: net.Stream, dest: net.Stream, ctx: *T) handlerError!usize {
+
+        // returns true = conitnue, false = terminate
+        fn upstream(h: *Handler(T), src: net.Stream, dest: net.Stream, ctx: *T) handlerError!bool {
             return h.vtable.upstream(h.ptr, src, dest, ctx);
         }
     };

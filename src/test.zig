@@ -65,8 +65,16 @@ test "proxy benchmark" {
 test "http parsing" {
     const cases = [_]TestCase{
         .{
-            .req = "HTTP/1.0 GET /\r\n\r\n",
-            .expected = "500",
+            .req = "GET / CRUMBLES\r\n\r\n",
+            .expected = "500\r\n",
+        },
+        .{
+            .req = "GET / HTTP/1.0\r\n\r\n",
+            .expected = "Echo: GET / HTTP/1.0\r\n\r\n",
+        },
+        .{
+            .req = "GET / HTTP/1.0\r\nHeader1: Value1\r\nH2: V2\r\n\r\n",
+            .expected = "GET / HTTP/1.0\r\nHeader1: Value1\r\nH2: V2\r\n\r\n",
         },
     };
 
