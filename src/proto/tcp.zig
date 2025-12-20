@@ -3,26 +3,26 @@ const net = std.net;
 const log = std.log.scoped(.proxy);
 const proxy = @import("../proxy.zig");
 
-pub const CopyCtx = struct {
+pub const TcpCtx = struct {
     buffer: [proxy.CONN_BUF_SIZE]u8 = undefined,
 
-    pub fn init(a: std.mem.Allocator) !*CopyCtx {
-        return try a.create(CopyCtx);
+    pub fn init(a: std.mem.Allocator) !*TcpCtx {
+        return try a.create(TcpCtx);
     }
 
-    pub fn reset(_: *CopyCtx) void {
+    pub fn reset(_: *TcpCtx) void {
         return;
     }
 
-    pub fn deinit(ctx: *CopyCtx, a: std.mem.Allocator) void {
+    pub fn deinit(ctx: *TcpCtx, a: std.mem.Allocator) void {
         a.destroy(ctx);
     }
 };
 
-pub const Copy = struct {
+pub const Tcp = struct {
     keyword: []const u8,
 
-    pub fn handler(c: *Copy) proxy.Handler(CopyCtx) {
+    pub fn handler(c: *Tcp) proxy.Handler(TcpCtx) {
         return .{
             .ptr = c,
             .vtable = &.{
@@ -32,8 +32,8 @@ pub const Copy = struct {
         };
     }
 
-    fn upstream(h: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!bool {
-        const this: *Copy = @ptrCast(@alignCast(h));
+    fn upstream(h: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *TcpCtx) proxy.handlerError!bool {
+        const this: *Tcp = @ptrCast(@alignCast(h));
         const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read == 0) {
             return false;
@@ -48,7 +48,7 @@ pub const Copy = struct {
         return true;
     }
 
-    fn downstream(_: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *CopyCtx) proxy.handlerError!bool {
+    fn downstream(_: *anyopaque, src: net.Stream, dest: net.Stream, ctx: *TcpCtx) proxy.handlerError!bool {
         const bytes_read = try src.read(&ctx.buffer);
         if (bytes_read > 0) {
             _ = try dest.writeAll(ctx.buffer[0..bytes_read]);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const log = std.log.scoped(.proxy);
+
 const proxy = @import("../proxy.zig");
 
 pub const Version = enum {
@@ -93,8 +94,10 @@ pub const Http = struct {
             return false;
         }
 
-        parse(ctx) catch {
-            _ = try src.writeAll("500\r\n");
+        parseRequest(ctx) catch |ex| {
+            var buf = [_]u8{0} ** 1024;
+            const msg = std.fmt.bufPrint(&buf, "500 {any}\r\n", .{ex}) catch unreachable;
+            _ = try src.writeAll(msg);
             return false;
         };
 
@@ -112,7 +115,7 @@ pub const Http = struct {
     }
 };
 
-fn parse(ctx: *HttpCtx) ParseError!void {
+fn parseRequest(ctx: *HttpCtx) ParseError!void {
     if (ctx.state == .RequestLine) {
         var methodEndIdx: usize = 0;
         if (std.mem.startsWith(u8, ctx.buffer, "OPTIONS ")) {
