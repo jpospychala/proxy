@@ -1,7 +1,13 @@
+- proxy
+-- logging request/response
+-- caching
+-- read config from file
+-- watch config file for changes
 - waf related
+-- top10 owasp, ie. injections
+-- body structure monitoring
 -- parse http request
--- more elaborate keyword filtering
+-- parse request body, enforce specific body structure (json)
 -- compatibility with core-ruleset
-- add benchmark
-- read config from file
-- watch config file for changes
+- testing
+-- benchmark
