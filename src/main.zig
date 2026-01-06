@@ -10,8 +10,8 @@ pub fn main() !void {
     var httpH = http.Http{};
     var proxyServer = proxy.ProxyServer(http.HttpCtx){
         .allocator = gpa.allocator(),
-        .address = try net.Address.parseIp("127.0.0.1", 8080),
-        .dest = try net.Address.parseIp("127.0.0.1", 8081),
+        .listen_address = try net.Address.parseIp("127.0.0.1", 8080),
+        .destination = try net.Address.parseIp("127.0.0.1", 8081),
         .handler = httpH.handler(),
     };
 

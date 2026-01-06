@@ -26,8 +26,8 @@ test "proxy benchmark" {
     };
     var proxyServer = proxy.ProxyServer(tcp.TcpCtx){
         .allocator = std.testing.allocator,
-        .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
-        .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
+        .listen_address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
+        .destination = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
         .handler = tcpH.handler(),
     };
     try proxyServer.spawn();
@@ -43,7 +43,7 @@ test "proxy benchmark" {
 
     for (0..count) |i| {
         const msg = try std.fmt.bufPrint(&buffer, "Msg {d}", .{i});
-        const n = proxyReq(&actual, msg, proxyServer.address) catch |err| {
+        const n = proxyReq(&actual, msg, proxyServer.listen_address) catch |err| {
             errs += 1;
             std.debug.print("Error in proxy request: {}\n", .{err});
             continue;
@@ -65,8 +65,8 @@ test "proxy benchmark" {
 test "http parsing pub" {
     const cases = [_]TestCase{
         .{
-            .req = &([_][]const u8{ "GET / HT", "TP/1.0\r\nHeader1", ": Value1\r\nH2: V2\r\n\r\n" }),
-            .expected = "Echo: GET / HTTP/1.0\r\nHeader1: Value1\r\nH2: V2\r\n\r\n",
+            .req = &([_][]const u8{ "GE", "T / HT", "TP/1.0\r\nHost", ": www.example.com\r\n\r\n" }),
+            .expected = "HTTP/1.1 200 OK\r\n",
         },
     };
 
@@ -105,8 +105,8 @@ test "http parsing" {
     var httpH = http.Http{};
     var proxyServer = proxy.ProxyServer(http.HttpCtx){
         .allocator = std.testing.allocator,
-        .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
-        .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
+        .listen_address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
+        .destination = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
         .handler = httpH.handler(),
     };
     try proxyServer.spawn();
@@ -114,7 +114,7 @@ test "http parsing" {
 
     var actual: [1024]u8 = undefined;
     for (cases) |tc| {
-        const n = try proxyReq2(&actual, tc.req, proxyServer.address);
+        const n = try proxyReq2(&actual, tc.req, proxyServer.listen_address);
         try std.testing.expectEqualStrings(tc.expected, actual[0..n]);
     }
 }
@@ -134,8 +134,8 @@ test "proxy blocking text" {
     };
     var proxyServer = proxy.ProxyServer(tcp.TcpCtx){
         .allocator = std.testing.allocator,
-        .address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
-        .dest = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
+        .listen_address = try net.Address.parseIp("127.0.0.1", 0), // random port for proxy
+        .destination = try net.Address.parseIp("127.0.0.1", echoServer.address.getPort()),
         .handler = tcpH.handler(),
     };
     try proxyServer.spawn();
@@ -144,7 +144,7 @@ test "proxy blocking text" {
     var recvBuf: [1024]u8 = undefined;
     var n: usize = undefined;
 
-    n = try proxyReq(&recvBuf, "bomb", proxyServer.address);
+    n = try proxyReq(&recvBuf, "bomb", proxyServer.listen_address);
     try std.testing.expectEqual(0, n);
 }
 

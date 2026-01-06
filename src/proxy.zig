@@ -22,28 +22,19 @@ const Dir = enum { upstream, downstream };
 pub fn ProxyServer(comptime T: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        address: net.Address,
-        dest: net.Address,
+        listen_address: net.Address,
+        destination: net.Address,
         handler: Handler(T),
         isUp: bool = true,
         pool: Thread.Pool = undefined,
 
-        pub fn runNoErr(ctx: *ProxyServer(T)) void {
-            ctx.run() catch |err| {
-                log.err("Thread failed: {any}\n", .{err});
-            };
-        }
-
         pub fn run(config: *ProxyServer(T)) !void {
-            var server = config.address.listen(.{
+            var server = try config.listen_address.listen(.{
                 .reuse_address = true,
-            }) catch |err| {
-                log.err("Failed to start proxy server: {any}", .{err});
-                return err;
-            };
-            config.address = server.listen_address;
+            });
             defer server.deinit();
-            log.info("Proxy listening on {f}... Forwarding to {f}...", .{ config.address, config.dest });
+            config.listen_address = server.listen_address;
+            log.info("Proxy listening on {f}... Forwarding to {f}...", .{ config.listen_address, config.destination });
 
             var links = try config.allocator.alloc(?Link, CONNS_LIMIT);
             defer config.allocator.free(links);
@@ -87,7 +78,7 @@ pub fn ProxyServer(comptime T: type) type {
                             };
 
                             if (nextIdx(links[0..])) |j| {
-                                const dest_stream = net.tcpConnectToAddress(config.dest) catch |err| {
+                                const dest_stream = net.tcpConnectToAddress(config.destination) catch |err| {
                                     log.err("Proxy Failed to connect to upstream {any}\n", .{err});
                                     std.posix.close(client.stream.handle);
                                     continue;
@@ -146,9 +137,15 @@ pub fn ProxyServer(comptime T: type) type {
             }
 
             // Wait for the proxy server to bind to a port
-            while (config.address.getPort() == 0) {
+            while (config.listen_address.getPort() == 0) {
                 std.Thread.sleep(std.time.ns_per_ms);
             }
+        }
+
+        pub fn runNoErr(ctx: *ProxyServer(T)) void {
+            ctx.run() catch |err| {
+                log.err("Thread failed: {any}\n", .{err});
+            };
         }
 
         pub fn shutdown(config: *ProxyServer(T)) void {
